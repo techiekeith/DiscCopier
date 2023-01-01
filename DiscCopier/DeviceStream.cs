@@ -5,37 +5,67 @@ namespace DiscCopier;
 
 public class DeviceStream: Stream, IDisposable
 {
-    // public const short FILE_ATTRIBUTE_NORMAL = 0x80;
-    // public const short INVALID_HANDLE_VALUE = -1;
     private const uint GenericRead = 0x80000000;
-    // public const uint GENERIC_WRITE = 0x40000000;
-    // public const uint CREATE_NEW = 1;
-    // public const uint CREATE_ALWAYS = 2;
     private const uint OpenExisting = 3;
 
-    private SafeFileHandle? _handleValue = null;
-    private FileStream? _fs = null;
-    private bool _disposed = false;
+    private const int FileDeviceCdrom = 0x00000002;
+    private const int IoctlCdromSetSpeed = 0x0018;
+    private const int BufferedMethod = 0;
+    private const int ReadAccess = 1;
+
+    private const int CdromRequestSetSpeed = 0;
+    private const int CdromDefaultRotation = 0;
+    private const int DvdSpeed = 11_080; // 8x DVD
+
+    private struct CdromSetSpeed
+    {
+        public int RequestType;
+        public ushort ReadSpeed;
+        public ushort WriteSpeed;
+        public int RotationControl;
+    }
+
+    private SafeFileHandle? _handleValue;
+    private FileStream? _fs;
+    private bool _disposed;
 
     // Use interop to call the CreateFile function.
     // For more information about CreateFile,
     // see the unmanaged MSDN reference library.
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr CreateFile(string lpFileName, uint dwDesiredAccess,
-        uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition,
-        uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+    private static extern IntPtr CreateFile(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        IntPtr lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        IntPtr hTemplateFile);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        IntPtr hDevice,
+        int dwIoControlCode,
+        IntPtr lpInBuffer,
+        int nInBufferSize,
+        IntPtr lpOutBuffer,
+        int nOutBufferSize,
+        ref int lpBytesReturned,
+        IntPtr lpOverlapped);
+    
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool ReadFile(
-        IntPtr hFile,                        // handle to file
-        byte[] lpBuffer,                // data buffer
-        int nNumberOfBytesToRead,        // number of bytes to read
-        ref int lpNumberOfBytesRead,    // number of bytes read
-        IntPtr lpOverlapped
-        //
-        // ref OVERLAPPED lpOverlapped        // overlapped buffer
-    );
+        IntPtr hFile,
+        byte[] lpBuffer,
+        int nNumberOfBytesToRead,
+        ref int lpNumberOfBytesRead,
+        IntPtr lpOverlapped);
 
+    private static int DeviceIoControlCode(int deviceType, int function, int method, int access)
+    {
+        return (deviceType << 16) | (access << 14) | (function << 2) | method;
+    }
+    
     public DeviceStream(string device)
     {
         Load(device);
@@ -63,6 +93,29 @@ public class DeviceStream: Stream, IDisposable
         // get the last Win32 error 
         // and throw a Win32Exception.
         if (_handleValue.IsInvalid)
+        {
+            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+        }
+
+        // Set optical drive speed
+        var cdromSetSpeed = new CdromSetSpeed {
+            RequestType = CdromRequestSetSpeed,
+            ReadSpeed = DvdSpeed,
+            WriteSpeed = DvdSpeed,
+            RotationControl = CdromDefaultRotation
+        };
+        var ioctlSize = Marshal.SizeOf<CdromSetSpeed>();
+        var ioctlPtr = Marshal.AllocHGlobal(ioctlSize);
+        Marshal.StructureToPtr(cdromSetSpeed, ioctlPtr, true);
+        
+        var bytesReturned = 0;
+        var ok = DeviceIoControl(_handleValue.DangerousGetHandle(),
+            DeviceIoControlCode(FileDeviceCdrom, IoctlCdromSetSpeed, BufferedMethod, ReadAccess),
+            ioctlPtr, ioctlSize,
+            IntPtr.Zero, 0,
+            ref bytesReturned, IntPtr.Zero);
+        Marshal.FreeHGlobal(ioctlPtr);
+        if (!ok)
         {
             Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
         }
@@ -109,9 +162,10 @@ public class DeviceStream: Stream, IDisposable
             Console.WriteLine($"handle:{_handleValue?.DangerousGetHandle()} bufferSize:{count} bytesRead:{bytesRead}");
             Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
         }
-        for (var i = 0; i < bytesRead; i++)
+
+        if (bytesRead > 0)
         {
-            buffer[offset + i] = bufBytes[i];
+            Buffer.BlockCopy(bufBytes, 0, buffer, offset, bytesRead);
         }
         return bytesRead;
     }

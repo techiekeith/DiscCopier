@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace DiscCopier;
@@ -6,8 +7,9 @@ public static class FileUtils
 {
     private static readonly string IllegalChars = new string(Path.GetInvalidFileNameChars()) + "!";
     private const string IllegalFilenames = "^(?:PRN|AUX|CLOCK\\$|NUL|CON|COM\\d|LPT\\d)$";
-    private const int BufferSize = 1048576;
-    private const int WriterFlushInterval = 10485760;
+    private const int BufferSize = 1_048_576;
+    private const int WriterFlushInterval = BufferSize * 16;
+    private const int TimeSnapshots = 128;
     private const long DvdNamePosition = 0x8028;
     private const long DvdNameLength = 32;
 
@@ -19,6 +21,7 @@ public static class FileUtils
 
     public static void CopyDeviceToFile(DriveInfo drive, string destPath, bool verbose = false)
     {
+        var size = drive.TotalSize;
         var device = $@"\\.\{drive.Name[0]}:";
         if (verbose)
         {
@@ -30,6 +33,9 @@ public static class FileUtils
         var buffer = new byte[BufferSize];
 
         var bytesRead = 0L;
+        var stopwatch = Stopwatch.StartNew();
+        var times = new long[TimeSnapshots];
+        var timeIndex = 0;
 
         try
         {
@@ -48,10 +54,17 @@ public static class FileUtils
                 }
 
                 writer.Write(buffer, 0, count);
-                if (verbose)
+                if (verbose && bytesRead > 0)
                 {
-                    Console.Write(
-                        $"Written {bytesRead} / {drive.TotalSize} bytes ({100 * bytesRead / drive.TotalSize}%)\r");
+                    var windowRead = times[timeIndex] == 0 ? bytesRead : BufferSize * (TimeSnapshots - 1) + count;
+                    var windowElapsed = stopwatch.ElapsedMilliseconds - times[timeIndex];
+                    times[timeIndex] += windowElapsed;
+                    timeIndex = (timeIndex + 1) % TimeSnapshots;
+                    var throughput = (double) windowRead / (windowElapsed * 1000);
+                    var eta = windowElapsed * (size - bytesRead) / windowRead;
+                    var etaTime = TimeSpan.FromMilliseconds(eta - eta % 1000);
+                    var progress = 100 * bytesRead / size;
+                    Console.Write($"Written {bytesRead} / {size} bytes ({progress}%) {throughput:0.##} MB/s, ETA {etaTime:c}      \r");
                 }
 
                 if (bytesRead % WriterFlushInterval == 0)
@@ -62,7 +75,11 @@ public static class FileUtils
         }
         catch (Exception e)
         {
-            Console.WriteLine(e.Message);
+            if (verbose)
+            {
+                Console.WriteLine();
+            }
+            Console.WriteLine(e);
         }
         finally
         {
