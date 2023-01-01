@@ -6,7 +6,11 @@ namespace DiscCopier;
 public class DeviceStream: Stream, IDisposable
 {
     private const uint GenericRead = 0x80000000;
+    private const uint GenericWrite = 0x40000000;
+    private const uint FileShareRead = 0x00000001;
+    private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
+    private const uint FileFlagRandomAccess = 0x10000000;
 
     private const int FileDeviceCdrom = 0x00000002;
     private const int IoctlCdromSetSpeed = 0x0018;
@@ -80,11 +84,11 @@ public class DeviceStream: Stream, IDisposable
 
         // Try to open the file.
         var ptr = CreateFile(path,
-            GenericRead,
-            0,
+            GenericRead | GenericWrite,
+            FileShareRead | FileShareWrite,
             IntPtr.Zero,
             OpenExisting,
-            0,
+            FileFlagRandomAccess,
             IntPtr.Zero);
 
         _handleValue = new SafeFileHandle(ptr, true);
@@ -159,8 +163,9 @@ public class DeviceStream: Stream, IDisposable
                 ref bytesRead,
                 IntPtr.Zero))
         {
-            Console.WriteLine($"handle:{_handleValue?.DangerousGetHandle()} bufferSize:{count} bytesRead:{bytesRead}");
-            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+            var errorCode = Marshal.GetHRForLastWin32Error();
+            Console.WriteLine($"\nhandle:{_handleValue?.DangerousGetHandle()} bufferSize:{count} bytesRead:{bytesRead} errorCode:{errorCode:x8}");
+            Marshal.ThrowExceptionForHR(errorCode);
         }
 
         if (bytesRead > 0)

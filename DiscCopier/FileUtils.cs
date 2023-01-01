@@ -6,17 +6,20 @@ namespace DiscCopier;
 public static class FileUtils
 {
     private static readonly string IllegalChars = new string(Path.GetInvalidFileNameChars()) + "!";
-    private const string IllegalFilenames = "^(?:PRN|AUX|CLOCK\\$|NUL|CON|COM\\d|LPT\\d)$";
+    private const string IllegalFilenames = @"^(?:PRN|AUX|CLOCK\$|NUL|CON|COM\d|LPT\d)$";
     private const int BufferSize = 1_048_576;
     private const int WriterFlushInterval = BufferSize * 16;
     private const int TimeSnapshots = 128;
     private const long DvdNamePosition = 0x8028;
     private const long DvdNameLength = 32;
 
-    public static DriveInfo? FindDrive(string choice) =>
-        DriveInfo.GetDrives().FirstOrDefault(aDrive => MatchesDrive(choice, aDrive));
+    public static DriveInfo? FindFirstOpticalDrive(string choice) =>
+        DriveInfo.GetDrives().FirstOrDefault(aDrive => MatchesOpticalDrive(choice, aDrive));
 
-    private static bool MatchesDrive(string choice, DriveInfo aDrive) =>
+    public static DriveInfo? FindLastFixedDrive() =>
+        DriveInfo.GetDrives().LastOrDefault(aDrive => aDrive.DriveType == DriveType.Fixed);
+
+    private static bool MatchesOpticalDrive(string choice, DriveInfo aDrive) =>
         aDrive.DriveType == DriveType.CDRom && (choice == "" || aDrive.Name[0] == choice[0]);
 
     public static void CopyDeviceToFile(DriveInfo drive, string destPath, bool verbose = false)
